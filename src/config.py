@@ -119,7 +119,9 @@ def lambda_handler(event, context):
     if not path_params['config_profile_names']:
         return http_response('No configuration profile name', 400)
 
-    check_cond = (True if not 'check_cond' in request_params else False) # Get check_cond flag
+    # Lambda will drop parameters that equal to 0
+    check_cond = (1 if not 'check_cond' in request_params else int(request_params['check_cond'])) # Get check_cond flag
+    print('# CHECK COND =', check_cond)
 
     # Get condition priority
     if check_cond:
@@ -144,7 +146,7 @@ def lambda_handler(event, context):
 
     print('#RAW_CONFIGS:', raw_configs_json)
 
-    if check_cond:
+    if check_cond > 0:
         conditions = available_conditions(condition_priority_json, request_params)
         print('#AVAILABLE PRIORITY:', conditions)
 
