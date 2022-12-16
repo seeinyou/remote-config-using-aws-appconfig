@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Create AWS AppConfig resources, including Freeform configurations and feature flags for testing
+
+Parameters:
+  AppConfigApplicatonName:
+    Description: The Application name in AppConfig.
+    Type: String
+    Default: uswest2-appconfig-poc-1
+  AppConfigEnvironment1:
+    Description: The Environment name for the Application in AppConfig.
+    Type: String
+    Default: 'dev'
+  AppConfigEnvironment2:
+    Description: The Environment 2 name for the Application in AppConfig.
+    Type: String
+    Default: 'prod'
+  AppConfigEnvironment3:
+    Description: The Environment 3 name for the Application in AppConfig.
+    Type: String
+    Default: 'abtest'
+  AppConfigProfileCondition:
+    Description: The condition priority list name for the Application in AppConfig.
+    Type: String
+    Default: 'condition-priority'
+  AppConfigProfileName:
+    Description: The configuration profile name for the Application in AppConfig.
+    Type: String
+    Default: 'remote-config-1'
+
+
+Conditions:
+  # Control the creation of the Environment 2
+  CondCreateEnv2:
+    !Not [ !Equals [!Ref AppConfigEnvironment2, ''] ]
+  # Control the creation of the Environment 3
+  CondCreateEnv3:
+    !Not [ !Equals [!Ref AppConfigEnvironment3, ''] ]
+  # Control the creation of the condition-priority list
+  CondCreateConditionPriority:
+    !Not [ !Equals [!Ref AppConfigProfileCondition, ''] ]
+
+
+Resources:
+  # Create AWS AppConfig resources
+  Application:
+    Type: AWS::AppConfig::Application
+    Properties:
+      Name: !Ref AppConfigApplicatonName
+      Description: AppConfig application for testing remote config
+
+  Environment1:
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref Application
+      Name: !Ref AppConfigEnvironment1
+      Description: An environment for the multi-environment AppConfig application.
+
+  Environment2:
+    Condition: CondCreateEnv2
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref Application
+      Name: !Ref AppConfigEnvironment2
+      Description: An environment for the multi-environment AppConfig application.
+
+  Environment3:
+    Condition: CondCreateEnv3
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref Application
+      Name: !Ref AppConfigEnvironment3
+      Description: An environment for the multi-environment AppConfig application.
+
+  ProfileConditionPriorityList:
+    Condition: CondCreateConditionPriority
+    Type: AWS::AppConfig::ConfigurationProfile
+    Properties:
+      LocationUri: hosted
+      ApplicationId: !Ref Application
+      Name: !Ref AppConfigProfileCondition
+      Description: AppConfig Remote Config application profile for condition-priority list
+      Type: AWS.Freeform
+
+  ConfigVersionConditionPriority:
+    Condition: CondCreateConditionPriority
+    Type: AWS::AppConfig::HostedConfigurationVersion
+    Properties:
+      ApplicationId: !Ref Application
+      ConfigurationProfileId: !Ref ProfileConditionPriorityList
+      ContentType: application/json
+      Content: |
+        [
+          {
+            "name": "ios",
+            "param": "device_os",
+            "expression": " == 'ios'"
+          },
+          {
+            "name": "android",
+            "param": "device_os",
+            "expression": " == 'android'"
+          },
+          {
+            "name": "canada",
+            "param": "country",
+            "expression": " == 'canada'"
+          },
+          {
+            "name": "v2-65",
+            "param": "app_version",
+            "expression": " >= '2.65'"
+          }
+        ]
+
+  Profile:
+    Type: AWS::AppConfig::ConfigurationProfile
+    Properties:
+      LocationUri: hosted
+      ApplicationId: !Ref Application
+      Name: !Ref AppConfigProfileName
+      Description: |
+        The remote configurations include all feature flags and their conditional values for app to retrieve. Please put conditional values into feature flag attributes.
+      Type: AWS.AppConfig.FeatureFlags
+
+  # ConfigVersion:
+  #   Type: AWS::AppConfig::HostedConfigurationVersion
+  #   Properties:
+  #     ApplicationId: !Ref Application
+  #     ConfigurationProfileId: !Ref Profile
+  #     ContentType: application/json
+  #     Content: |
+  #       {
+  #         "transform_reverse": true,
+  #         "transform_allcaps": false
+  #       }
+
+  # Create the deployment strategy for the deployment of the condition priority
+  DeploymentStrategy:
+    Type: AWS::AppConfig::DeploymentStrategy
+    Properties:
+      ReplicateTo: NONE
+      DeploymentDurationInMinutes: 0
+      GrowthFactor: 100
+      Name: AllAtOnceNoBake
+      FinalBakeTimeInMinutes: 0
+
+  # Create a deployment for condition priority list
+  DeploymentConditionPriority:
+    Condition: CondCreateConditionPriority
+    Type: AWS::AppConfig::Deployment
+    Properties:
+      DeploymentStrategyId: !Ref DeploymentStrategy
+      ConfigurationProfileId: !Ref ProfileConditionPriorityList
+      EnvironmentId: !Ref Environment1
+      ConfigurationVersion: !Ref ConfigVersionConditionPriority
+      ApplicationId: !Ref Application
+
+  # Deployment:
+  #   Type: AWS::AppConfig::Deployment
+  #   Properties:
+  #     DeploymentStrategyId: !Ref DeploymentStrategy
+  #     ConfigurationProfileId: !Ref Profile
+  #     EnvironmentId: !Ref Environment1
+  #     ConfigurationVersion: !Ref ConfigVersion
+  #     ApplicationId: !Ref Application
+
