@@ -8,10 +8,11 @@ Parameters from requests
 Path parameters:
 - app: AWS AppConfig application identifier
 - env: AWS AppConfig environment identifier
-- config_profile_names: AWS AppConfig configuration profile name (should support multiple configuration profile names in the future)
+- config_profile_names: AWS AppConfig configuration profile names. Note: use comma to separate multiple configuration profile names and the same key in multiple configuration profiles will be the last apperance
 
 QueryString parameters:
 - flag: reserved parameter to retrieve specific one or more flags
+- check_cond: 0 or 1, whether check condtion priority list
 - condition param names and values such as device_os = ios,etc.
 '''
 
@@ -19,8 +20,7 @@ QueryString parameters:
 appconfig_client = boto3.client('appconfigdata')
 
 # Global configures
-confident_score_threshold = 70 # Ignore the result when confident score is less than the threshold.
-condition_priority_name = 'condition-priority'
+condition_priority_name = 'condition-priority' # The default condition priority name
 default_error_msg = 'Get configuration from AppConfig failed!'
 
 
@@ -38,6 +38,40 @@ def get_appconfig_config_by_layer(app, env, config_name, flags = []):
         print('#ERROR get_appconfig_config_by_layer exception:', e)
         return False
 
+
+# Get multiple configuration profiles from AWS AppConfig by calling APIs
+def get_appconfig_multi_configs_by_layer(app, env, config_name_str, flags = []):
+    config_names = []
+    tmp_configs = {}
+    raw_configs = {}
+    i = 0
+
+    # Check configuration profile name contains , or not.
+    if config_name_str.find(',') != -1:
+        # there are multiple configuration profile names
+        config_names = config_name_str.split(',')
+    else:
+        config_names.append(config_name_str)
+    
+    print('# CONFIG PROFILES', config_names)
+    
+    for config_profile in config_names: # Retrieve configuration profile in a loop
+        tmp_configs = get_appconfig_config_by_layer(app, env, config_profile)
+        
+        if not tmp_configs: # Handle errors
+            continue
+
+        # Handle configurations
+        if i == 0:
+            raw_configs = tmp_configs
+        else:
+            raw_configs.update(tmp_configs) # Merge to the full dicts
+            # raw_configs = (raw_configs | tmp_configs)
+
+        i += 1
+
+    return raw_configs
+    
 
 # Get configuration profiles from AWS AppConfig by calling APIs
 # def get_appconfig_config(app, env, config_name, mini_poll_sec = 15):
@@ -69,12 +103,11 @@ def get_appconfig_config_by_layer(app, env, config_name, flags = []):
 
 '''
   Lambda handler
-  Get the condition priority list
+  Get the condition priority list when check_cond = 1
   Get configurations
   Filter configurations using the condition priority list and return results
 '''
 def lambda_handler(event, context):
-    check_cond = True # Check condition flag
 
     print("event: {}".format(event))
     path_params = event['pathParameters']
@@ -82,49 +115,56 @@ def lambda_handler(event, context):
     print("PATH PARAMS: {}".format(path_params))
     print("QUERY PARAMS: {}".format(request_params))
 
+    # Error handling
+    if not path_params['config_profile_names']:
+        return http_response('No configuration profile name', 400)
+
+    check_cond = (True if not 'check_cond' in request_params else False) # Get check_cond flag
+
     # Get condition priority
-    raw_condition_priority = get_appconfig_config_by_layer(path_params['app'], path_params['env'], condition_priority_name)
-    
-    if raw_condition_priority:
-        condition_priority_json = raw_condition_priority
-    else:
-        check_cond = False
-        print('# WARNING: Get no conditions!')
-        # return http_response(default_error_msg, 400)
+    if check_cond:
+        raw_condition_priority = get_appconfig_config_by_layer(path_params['app'], path_params['env'], condition_priority_name)
+        
+        if raw_condition_priority:
+            condition_priority_json = raw_condition_priority
+            print('#CONDITION_PRIORITY:', condition_priority_json)
+        else:
+            check_cond = False
+            print('# WARNING: Get no conditions!')
+            # return http_response(default_error_msg, 400)
 
     # Get configuration_profile
-    raw_configs = get_appconfig_config_by_layer(path_params['app'], path_params['env'], path_params['config_profile_names'])
+    # raw_configs = get_appconfig_config_by_layer(path_params['app'], path_params['env'], path_params['config_profile_names'])
+    raw_configs = get_appconfig_multi_configs_by_layer(path_params['app'], path_params['env'], path_params['config_profile_names'])
 
     if raw_configs:
         raw_configs_json = raw_configs
     else:
         return http_response(default_error_msg, 400)
 
-    print('#CONDITION_PRIORITY:', condition_priority_json)
     print('#RAW_CONFIGS:', raw_configs_json)
 
     if check_cond:
         conditions = available_conditions(condition_priority_json, request_params)
         print('#AVAILABLE PRIORITY:', conditions)
-    else:
-        conditions = []
 
-    if raw_configs_json:
+        # Filter configurations with conditions
+        configs = {}
 
-        if check_cond:
-            configs = {}
+        for element in raw_configs_json:
+            # print('### RAW ELEMENT:', element) # Debug
 
-            for element in raw_configs_json:
-                # print('### RAW ELEMENT:', element) # Debug
+            tmp_configs = check_values(raw_configs_json[element], conditions)
 
-                tmp_configs = check_values(raw_configs_json[element], conditions)
+            if tmp_configs:
+                configs[element] = tmp_configs
 
-                if tmp_configs:
-                    configs[element] = tmp_configs
-        else:
-            configs = raw_configs_json  
-        # print('#FILTERED CONFIGS:', configs) # Debug
+    else:   # Return configurations directly
+        configs = raw_configs_json
 
+    print('#FILTERED CONFIGS:', configs) # Debug
+
+    # Return the HTTP response
     if configs:
         return http_response(json.dumps(configs))
     else:
